@@ -21,8 +21,7 @@ import {
 } from "lucide-react";
 
 // Endereco do backend. Ajuste se voce rodar em outra porta/host.
-const API_BASE = "http://localhost:4000/api";
-
+const API_BASE = "https://vm-cortes-backend.onrender.com/api";
 // Endereco que o CELULAR precisa conseguir alcançar para o QR code funcionar.
 // "localhost" só existe para a própria máquina que está rodando o backend —
 // um celular escaneando o QR não consegue abrir "localhost" e chegar no seu

@@ -202,6 +202,18 @@ function Painel({ aoSair }) {
     if (qrAberto === "youtube" && contaYoutube) setQrAberto(null);
     if (qrAberto === "tiktok" && contaTiktok) setQrAberto(null);
   }, [contaYoutube, contaTiktok, qrAberto]);
+
+  // Enquanto algum item estiver em processamento (transcrevendo, cortando,
+  // etc.), fica atualizando a fila a cada 4s para acompanhar o progresso
+  // sem precisar a pessoa ficar recarregando a página na mão.
+  const emProcessamento = fila.some((v) =>
+    ["transcrevendo", "escolhendo_trecho", "cortando", "salvando"].includes(v.statusProcessamento)
+  );
+  useEffect(() => {
+    if (!emProcessamento) return;
+    const id = setInterval(carregarFila, 4000);
+    return () => clearInterval(id);
+  }, [emProcessamento, carregarFila]);
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     if (params.has("youtube") || params.has("tiktok")) {
@@ -309,6 +321,34 @@ function Painel({ aoSair }) {
   async function rejeitarItem(itemId) {
     try {
       await chamarApi(`/queue/${itemId}/reject`, { method: "POST" });
+      await carregarFila();
+    } catch (e) {
+      setErro(e.message);
+    }
+  }
+
+  async function enviarVideoOriginal(itemId, arquivo) {
+    setFila((prev) => prev.map((v) => (v.id === itemId ? { ...v, statusProcessamento: "enviando" } : v)));
+    try {
+      const formData = new FormData();
+      formData.append("video", arquivo);
+      const resposta = await fetch(`${API_BASE}/queue/${itemId}/upload`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${obterToken()}` },
+        body: formData,
+      });
+      const dados = await resposta.json();
+      if (!resposta.ok) throw new Error(dados.erro || "Falha ao enviar o vídeo.");
+      await carregarFila();
+    } catch (e) {
+      setErro(e.message);
+      await carregarFila();
+    }
+  }
+
+  async function gerarCorte(itemId) {
+    try {
+      await chamarApi(`/queue/${itemId}/processar`, { method: "POST" });
       await carregarFila();
     } catch (e) {
       setErro(e.message);
@@ -764,6 +804,10 @@ function Painel({ aoSair }) {
                             </button>
                           </div>
                         )}
+
+                        {v.status === "aprovado" && (
+                          <BlocoCorte item={v} aoEnviarVideo={enviarVideoOriginal} aoGerarCorte={gerarCorte} />
+                        )}
                       </div>
                     ))}
                   </div>
@@ -783,6 +827,95 @@ function Painel({ aoSair }) {
         </div>
       </div>
     </div>
+  );
+}
+
+// ---------- Upload do vídeo original + acompanhamento do corte ----------
+
+const ROTULOS_STATUS = {
+  enviando: "Enviando vídeo...",
+  transcrevendo: "Transcrevendo o áudio...",
+  escolhendo_trecho: "Escolhendo o melhor trecho...",
+  cortando: "Cortando e gerando a legenda...",
+  salvando: "Salvando o corte final...",
+};
+
+function BlocoCorte({ item, aoEnviarVideo, aoGerarCorte }) {
+  const status = item.statusProcessamento;
+  const emAndamento = Boolean(ROTULOS_STATUS[status]);
+
+  if (status === "pronto" && item.corteUrl) {
+    return (
+      <div className="mt-1 rounded-xl border p-3.5" style={{ borderColor: "#D8DEDB", backgroundColor: "#F0F3F1" }}>
+        <div className="text-[13.5px] font-semibold mb-1">{item.tituloCorte || "Corte pronto"}</div>
+        {item.motivoCorte && (
+          <p className="text-[12.5px] mb-2.5" style={{ color: "#57615F" }}>
+            {item.motivoCorte}
+          </p>
+        )}
+        <video src={item.corteUrl} controls className="w-full max-w-[220px] rounded-lg" style={{ aspectRatio: "9/16" }} />
+      </div>
+    );
+  }
+
+  if (emAndamento) {
+    return (
+      <div
+        className="flex items-center gap-2 text-[13px] font-medium rounded-lg px-3 py-2.5"
+        style={{ backgroundColor: "#F0F3F1", color: "#57615F" }}
+      >
+        <RefreshCw size={14} className="animate-spin" />
+        {ROTULOS_STATUS[status]}
+      </div>
+    );
+  }
+
+  if (status === "erro") {
+    return (
+      <div className="rounded-lg px-3 py-2.5" style={{ backgroundColor: "#FBEEEC" }}>
+        <div className="text-[13px] font-medium mb-2" style={{ color: "#B5453A" }}>
+          {item.erroProcessamento || "Algo deu errado ao gerar o corte."}
+        </div>
+        <button
+          onClick={() => aoGerarCorte(item.id)}
+          className="flex items-center gap-1.5 text-[12.5px] font-semibold px-3 py-1.5 rounded-lg"
+          style={{ backgroundColor: "#1B2224", color: "#EEF1EF" }}
+        >
+          <RefreshCw size={13} /> Tentar de novo
+        </button>
+      </div>
+    );
+  }
+
+  if (item.videoOriginalUrl) {
+    return (
+      <button
+        onClick={() => aoGerarCorte(item.id)}
+        className="flex items-center gap-1.5 text-[13px] font-semibold px-3 py-1.5 rounded-lg"
+        style={{ backgroundColor: "#1B2224", color: "#EEF1EF" }}
+      >
+        <TrendingUp size={14} /> Gerar corte
+      </button>
+    );
+  }
+
+  return (
+    <label
+      className="flex items-center gap-1.5 text-[13px] font-semibold px-3 py-1.5 rounded-lg border cursor-pointer w-fit"
+      style={{ borderColor: "#D8DEDB", color: "#57615F" }}
+    >
+      <RefreshCw size={14} />
+      Enviar vídeo original
+      <input
+        type="file"
+        accept="video/*"
+        className="hidden"
+        onChange={(e) => {
+          const arquivo = e.target.files?.[0];
+          if (arquivo) aoEnviarVideo(item.id, arquivo);
+        }}
+      />
+    </label>
   );
 }
 
